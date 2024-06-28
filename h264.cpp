@@ -14,7 +14,7 @@
 	{
 		/* Поиск в видео-файле кодека h264 стартового кода длиной 3 байта */
 
-		if(buf_end == nullptr || buf == nullptr) return false;
+		if(buf_pos == nullptr || buf_end == nullptr || buf == nullptr) return false;
 		if(buf_end - buf <= 3) return false;
 		
 		return (buf[0] == 0 && buf[1] == 0 && buf[2] == 1) ? true : false;
@@ -24,141 +24,165 @@
 	{
 		/* Поиск в видео-файле кодека h264 стартового кода длиной 4 байта */
 
-		if(buf_end == nullptr || buf == nullptr) return false;
+		if(buf_pos == nullptr || buf_end == nullptr || buf == nullptr) return false;
 		if(buf_end - buf <= 4) return false;
 
 		return (buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 1) ? true : false;
 	}
 
-	uint8_t H264GetPayloadType(uint8_t header)
-	{
-		return header & 0x1F;
-	}
-
 	H264NalUnit::H264NalUnit()
 	{
-		header = 0;
-
-		m_pos       = nullptr;
-		m_end       = nullptr;
-		m_startCode = nullptr;
+		pos = nullptr;
+		end = nullptr;
 	}
 
-	uint8_t H264NalUnit::getForbiddenBit() const
+	int H264NalUnit::getSize() const
 	{
-		return header >> 7;
+		if(pos == nullptr || end == nullptr) return 0;
+
+		return end - pos;
 	}
 
-	uint8_t H264NalUnit::getReferenceIDC() const
+	uint8_t *H264NalUnit::getPosition() const
 	{
-		return (header >> 5) & 0x03;
+		return pos;
 	}
 
-	uint8_t H264NalUnit::getPayloadType() const
+	uint8_t *H264NalUnit::getPayload() const
 	{
-		return header & 0x1F;
+		return pos + 1;
 	}
 
-	int H264NalUnit::payload(char *buf, int bufsize)
+	int H264NalUnit::getPayloadLen() const
 	{
-		if(m_pos == nullptr || m_end == nullptr) return -1;
+		return end - pos - 1;
+	}
 
-		int i = 0;
-		uint8_t *cur = m_pos;
-		
-		while(i < bufsize && cur != m_end)
-		{
-			*buf++ = *cur++;
-			 i++;
-		}
-
-		return i;
+	void H264NalUnit::setPosition(uint8_t *position)
+	{
+		pos = position;
+		end = nullptr;
 	}
 
 	void H264NalUnit::init()
 	{
-		if(m_startCode == nullptr) return;
-		if(m_pos == nullptr || m_end == nullptr) return;
-		if(startcode3(m_startCode) == false && startcode4(m_startCode) == false) return;
+		if(pos == nullptr) return;
 
-		header = *m_pos;
-	}
+		uint8_t *cur = pos;
 
-	void H264NalUnit::clear()
-	{
-		m_pos       = nullptr;
-		m_end       = nullptr;
-		m_startCode = nullptr;		
-	}
+		if(startcode3(cur) || startcode4(cur))
+			while(*cur++ != 1);
+		else
+			return;
 
-	H264AccessUnit::H264AccessUnit()
-	{
-		m_pos     = nullptr;
-		cur       = nullptr;
-		m_end     = nullptr;
-		naluCount = 0;
-	}
-
-	void H264AccessUnit::parseNalUnit(H264NalUnit & nu)
-	{
-		if(cur == nullptr) return;
-	 	if(m_pos == nullptr || m_end == nullptr) return;
-		if(startcode3(cur) == false && startcode4(cur) == false) return;
+		pos = cur;
 		
-		nu.setStartCode(cur);
-		while(*cur++ != 1);
-		nu.setPos(cur);
-
-		while(cur != m_end)
+		while(cur != buf_end)
 		{
 			if(startcode3(cur) || startcode4(cur)) break;
 			cur++;
 		}
 
-		nu.setEnd(cur);
-		nu.init();
+		end = pos;
+
+		header = *pos;
 	}
+
+	H264AccessUnit::H264AccessUnit()
+	{
+		pos = nullptr;
+		cur = nullptr;
+		end = nullptr;
+		naluCount = 0;
+	}
+
+	int H264AccessUnit::getSize() const
+	{
+		if(pos == nullptr || end == nullptr) return 0;
+
+		return end - pos;
+	}
+
+	int H264AccessUnit::getPosition() const
+	{
+		return pos;
+	}
+
+	void H264AccessUnit::setPosition(uint8_t *position)
+	{
+		if(buf_pos == nullptr || buf_end == nullptr) return;
+		if(position == nullptr || position == buf_end) return;
+		if(startcode3(cur) == false && startcode4(cur) == false) return;
+
+		pos = position;
+		cur = nullptr;
+		end = nullptr;
+	}
+
+	void H264AccessUnit::parseNalUnit(H264NalUnit & nu)
+	{
+		if(pos == nullptr || cur == nullptr) return;
+
+		if(startcode3(cur) || startcode4(cur))
+		{
+			while(*cur++ != 1);
+			nu.setPosition(cur);
+			nu.init();
+		}
+
+		else return;
+
+		while(cur != buf_end)
+		{
+			if(startcode3(cur) || startcode4(cur)) break;
+			cur++;
+		}
+	 }
 
 	void H264AccessUnit::init()
 	{
-		if(buf_pos == nullptr) return;
-	 	if(m_pos == nullptr || m_end == nullptr) return;
+		if(buf_pos == nullptr || buf_end == nullptr || pos == nullptr) return;
 
-		cur = m_pos;
-		naluCount = 0;
+		H264NalUnit nalu;
 
-		while(cur != m_end)
-		{
-			if(startcode3(cur) || startcode4(cur)) 
-			{
-				while(*cur++ != 1);
-				naluCount++;
-			}
-			else cur++;
-		}
+		cur = pos;
 
-		cur = m_pos;
-	}
+		parseNulUnit(nalu);
+		if(nalu.getPayloadType() != 9) return;
 
-	void H264AccessUnit::reset()
-	{
-		cur = m_pos;
-		naluCount = 0;		
-	}
+		naluCount++;
 
-	void H264AccessUnit::clear()
-	{
-		cur   = nullptr;
-		naluCount = 0;
+		do 
+		{ 
+			parseNulUnit(nalu);
+			naluCount++;
+			if(nalu.getPayloadType() == 10) break;
+		} 
+		while(nalu.getPayloadType() != 9);
+
+		end = cur;
+		cur = pos;					
 	}
 
 	H264Parser::H264Parser()
 	{
 		/* Конструктор класса по умолчанию */
 
-		cur     = nullptr;
-		auCount = 0;
-		errstr  = nullptr;
+		pos = nullptr;
+		end = nullptr;
+	}
+
+	void H264Parser::parseAU(H264AccessUnit & au)
+	{
+		if(buf_pos == nullptr || pos == nullptr) return;
+
+		cur = pos;
+		
+		if(startcode3(cur) || startcode4(cur))
+		{
+			au.setPosition(cur);
+			au.init();	
+		}
 	}
 
 
@@ -166,9 +190,9 @@
 	{
 		/* Загрузка потока видео-файла h264 в буфер */
 		
-		if(filename == nullptr)
+		if(filename == NULL)
 		{
-			printf("H264loadFile(): invalid argument");
+			printf("h264LoadFile(): invalid argument");
 			return -1;
 		}
 		
@@ -192,7 +216,7 @@
 		bufsize = (int) file_info.st_size + 1;	
 		buf_pos = (uint8_t *) calloc(bufsize, sizeof(uint8_t));
 
-		if(buf_pos == nullptr)
+		if(*buf_pos == nullptr)
 		{
 			printf("H264::loadFile(): allocation error");
 			return -1;
@@ -208,131 +232,4 @@
 		buf_end = buf_pos + bufsize;
 
 		return bufsize;
-	}
-
-	void H264Parser::parseAccessUnit(H264AccessUnit & au)
-	{
-		if(buf_pos == nullptr || cur == nullptr) return;
-		if(startcode3(cur) == false && startcode4(cur) == false) return;
-
-		uint8_t header;
-		uint8_t *temp = cur;
-
-		while(cur != buf_end && *cur != 1) cur++;
-		if(cur == buf_end) return;
-		cur++;
-
-		header = *cur;
-		if(H264GetPayloadType(header) != 9 && H264GetPayloadType(header) != 10) return;
-		au.setPos(temp);
-
-		while(cur != buf_end)
-		{
-			if(startcode3(cur) || startcode4(cur))
-			{
-				temp = cur;
-				while(*cur++ != 1);
-
-				header = *cur;
-				if(H264GetPayloadType(header) == 9 || H264GetPayloadType(header) == 10)
-				{
-					au.setEnd(temp);	
-					cur = temp;				
-					break;
-				}
-			}
-
-			cur++;
-		}
-
-		if(cur == buf_end) au.setEnd(buf_end);
-		au.init();
-	}
-
-	void H264Parser::init()
-	{
-		if(buf_pos == nullptr) return;
-
-		cur = buf_pos;
-
-		if(startcode3(cur) == false && startcode4(cur) == false) return;
-
-		uint8_t header;
-		
-		while(cur != buf_end)
-		{
-			if(startcode3(cur) || startcode4(cur))
-			{
-				while(*cur++ != 1);
-
-				header = *cur;
-				if(H264GetPayloadType(header) == 9 || H264GetPayloadType(header) == 10) auCount++;
-			}
-
-			cur++;
-		}
-
-		cur = buf_pos;
-	}
-
-	void H264Parser::reset()
-	{
-		cur = buf_pos;
-		auCount = 0;
-		errstr = nullptr;
-	}
-
-	void H264Parser::clear()
-	{
-		cur = nullptr;
-		auCount = 0;
-	}
-
-	H264AUPacker()::H264AUPacker()
-	{
-		count = 0;
-		m_maxSize = 0;
-
-		pos = nullptr;
-		end = nullptr;
-
-		cache_pos = nullptr;
-		cache_end = nullptr;
-	}
-
-	void H264AUPacker::setMaxSize(int maxSize)
-	{
-		if(count != 0) return;
-		if(pos != nullptr || end != nullptr) return;
-
-		m_maxsize = maxSize;
-	}
-
-	void H264AUPacker::setAU(H264AccessUnit & au)
-	{
-		if(count != 0) return;
-		if(pos != nullptr || end != nullptr) return;
-
-		pos = nu.getPos();
-		end = nu.getEnd();
-	}
-
-	void H264AUPacker::init()
-	{
-		if(m_maxSize == 0) return;
-		if(pos != nullptr || end != nullptr) return;
-			
-		
-	}
-
-	void H264AUPacker()::clear()
-	{
-		count = 0;
-		m_maxSize = 0;
-
-		pos = nullptr;
-		end = nullptr;
-
-		cache_pos = nullptr;
-		cache_end = nullptr;		
 	}
